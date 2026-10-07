@@ -242,6 +242,16 @@ main {
   padding: 2px 7px;
   flex-shrink: 0;
 }
+.chord-badge {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--accent-contrast);
+  background: var(--accent-strong);
+  border-radius: 6px;
+  padding: 2px 7px;
+  flex-shrink: 0;
+}
 
 /* ---------- buttons ---------- */
 .btn {
@@ -380,6 +390,11 @@ main {
 }
 .song-toolbar .tool:active { background: var(--surface-2); }
 .song-toolbar .tool.playing { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
+.song-toolbar .tool.pace {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  min-width: 52px;
+}
 .song-toolbar .key-pill {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-weight: 700;
@@ -398,7 +413,7 @@ main {
 /* ---------- song chart ---------- */
 .chart {
   font-size: var(--chart-size);
-  padding: 10px 2px 60px;
+  padding: 10px 2px 230px;
   touch-action: pan-y pinch-zoom;
   user-select: text;
   -webkit-user-select: text;
@@ -434,6 +449,58 @@ main {
   margin-bottom: 2px;
 }
 .chart .capo-note { color: var(--muted); font-size: 0.85em; margin-top: 4px; }
+
+/* ---------- floating bottom-right controls (song view) ---------- */
+.fab-stack {
+  position: fixed;
+  right: 14px;
+  bottom: calc(env(safe-area-inset-bottom) + 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 45;
+}
+.fab-stack .fab {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  font-size: 19px;
+  box-shadow: var(--shadow);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.fab-stack .fab:active { background: var(--surface-2); }
+.fab-stack .fab.playing {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* ---------- setlist drag reorder ---------- */
+.row.dragging {
+  opacity: 0.55;
+  box-shadow: var(--shadow);
+  background: var(--surface-2);
+  border-radius: 10px;
+}
+.drag-handle {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 18px;
+  padding: 6px 8px;
+  cursor: grab;
+  touch-action: none;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+.drag-handle:active { cursor: grabbing; }
 
 /* ---------- fretboard / chord diagrams ---------- */
 .chord-diagram { display: block; margin: 0 auto; }

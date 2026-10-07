@@ -22,7 +22,7 @@ import Base from '../../layouts/Base.astro';
       deleteSet,
       getSet,
       removeFromSet,
-      moveSong,
+      setSetOrder,
     } from '../../lib/store';
     import { esc } from '../../lib/util';
     import { toast } from '../../lib/ui';
@@ -68,15 +68,14 @@ import Base from '../../layouts/Base.astro';
       const songs = set.songs.length
         ? set.songs
             .map(
-              (song, i) => `<div class="row">
+              (song, i) => `<div class="row" data-song="${esc(song.id)}">
+                <button class="drag-handle" aria-label="Reorder" draggable="false">⠿</button>
                 <div class="art">${i + 1}</div>
-                <a class="meta" href="${base}/song/?id=${encodeURIComponent(song.id)}&a=${encodeURIComponent(song.artist)}&t=${encodeURIComponent(song.title)}" style="text-align:left">
+                <a class="meta" href="${base}/song/?id=${encodeURIComponent(song.id)}&a=${encodeURIComponent(song.artist)}&t=${encodeURIComponent(song.title)}&set=${encodeURIComponent(set.id)}&si=${i}" style="text-align:left">
                   <div class="t">${esc(song.title)}</div>
                   <div class="s">${esc(song.artist)}</div>
                 </a>
                 <div class="row-actions">
-                  <button class="row-btn" data-up="${song.id}" ${i === 0 ? 'disabled' : ''}>↑</button>
-                  <button class="row-btn" data-down="${song.id}" ${i === set.songs.length - 1 ? 'disabled' : ''}>↓</button>
                   <button class="row-btn" data-del="${song.id}">✕</button>
                 </div>
               </div>`
@@ -86,7 +85,8 @@ import Base from '../../layouts/Base.astro';
 
       detailEl.innerHTML = `
         <div class="section-title">${esc(set.name)} · ${set.songs.length} songs</div>
-        <div class="rows">${songs}</div>
+        <div class="rows" id="setRows">${songs}</div>
+        <div class="hint" style="margin-top:6px">Drag ⠿ to reorder · swipe ←/→ on a song to move through the set</div>
         ${
           set.songs.length
             ? `<button class="btn danger sm" id="delSet" style="margin-top:16px">Delete this set</button>`
@@ -100,18 +100,57 @@ import Base from '../../layouts/Base.astro';
           toast('Removed');
         })
       );
-      detailEl.querySelectorAll('[data-up]').forEach((b) =>
-        b.addEventListener('click', () => {
-          moveSong(set.id, (b as HTMLElement).dataset.up!, -1);
-          renderDetail(set.id);
-        })
-      );
-      detailEl.querySelectorAll('[data-down]').forEach((b) =>
-        b.addEventListener('click', () => {
-          moveSong(set.id, (b as HTMLElement).dataset.down!, 1);
-          renderDetail(set.id);
-        })
-      );
+
+      // Drag to reorder (pointer events work on iOS Safari + desktop)
+      const rowsWrap = document.getElementById('setRows')!;
+      let dragEl: HTMLElement | null = null;
+      let draggingId = '';
+
+      function endDrag() {
+        if (!dragEl) return;
+        const ordered = Array.from(rowsWrap.querySelectorAll('.row')).map(
+          (r) => (r as HTMLElement).dataset.song!
+        );
+        setSetOrder(set.id, ordered);
+        dragEl.classList.remove('dragging');
+        dragEl = null;
+        draggingId = '';
+      }
+
+      rowsWrap.querySelectorAll('.drag-handle').forEach((handle) => {
+        handle.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          const row = (handle as HTMLElement).closest('.row') as HTMLElement;
+          dragEl = row;
+          draggingId = row.dataset.song!;
+          row.classList.add('dragging');
+          (handle as HTMLElement).setPointerCapture((e as PointerEvent).pointerId);
+        });
+        handle.addEventListener('pointermove', (e) => {
+          if (!dragEl || draggingId !== (dragEl as HTMLElement).dataset.song) return;
+          const rows = Array.from(rowsWrap.querySelectorAll('.row')) as HTMLElement[];
+          const from = rows.indexOf(dragEl!);
+          // Target index = which row midpoint slot the pointer has crossed.
+          const pt = (e as PointerEvent).clientY;
+          let target = rows.length - 1;
+          for (let i = 0; i < rows.length; i++) {
+            if (rows[i] === dragEl) continue;
+            const rMid = rows[i].getBoundingClientRect().top + rows[i].offsetHeight / 2;
+            if (pt < rMid) {
+              target = i <= from ? i : i - 1;
+              break;
+            }
+            target = i;
+          }
+          if (target !== from) {
+            rowsWrap.insertBefore(dragEl!, rows[target > from ? target + 1 : target] ?? null);
+          }
+        });
+        const onUp = () => endDrag();
+        handle.addEventListener('pointerup', onUp);
+        handle.addEventListener('pointercancel', onUp);
+      });
+
       document.getElementById('delSet')?.addEventListener('click', () => {
         if (confirm(`Delete “${set.name}”?`)) {
           deleteSet(set.id);

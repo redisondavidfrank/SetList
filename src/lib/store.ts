@@ -9,7 +9,9 @@ export interface Song {
 
 export interface OfflineSong extends Song {
   lyrics: string; // plain lyrics text ("" when unavailable)
-  hasChart: boolean; // a bundled chord chart exists
+  hasChart: boolean; // a bundled or DB chord chart exists
+  chartKeyName?: string; // when the chart came from the chord database
+  chartBody?: string;
   savedAt: number;
   scroll?: number; // saved scroll position (px)
 }
@@ -131,6 +133,28 @@ export function moveSong(setId: string, songId: string, dir: -1 | 1): void {
   const j = i + dir;
   if (i < 0 || j < 0 || j >= set.songs.length) return;
   [set.songs[i], set.songs[j]] = [set.songs[j], set.songs[i]];
+  writeSets(sets);
+}
+
+/** Move the song at `from` so it ends up at `to` (relative to the other songs). */
+export function reorderSet(setId: string, from: number, to: number): void {
+  const sets = getSets();
+  const set = sets.find((s) => s.id === setId);
+  if (!set || from === to) return;
+  const songs = set.songs.slice();
+  const [moved] = songs.splice(from, 1);
+  songs.splice(to, 0, moved);
+  set.songs = songs;
+  writeSets(sets);
+}
+
+/** Replace a set's song order wholesale (used by drag reordering). */
+export function setSetOrder(setId: string, orderedIds: string[]): void {
+  const sets = getSets();
+  const set = sets.find((s) => s.id === setId);
+  if (!set) return;
+  const byId = new Map(set.songs.map((s) => [s.id, s]));
+  set.songs = orderedIds.map((id) => byId.get(id)).filter((s): s is Song => !!s);
   writeSets(sets);
 }
 

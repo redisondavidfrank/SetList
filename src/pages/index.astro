@@ -46,6 +46,7 @@ const base = import.meta.env.BASE_URL;
 
   <script>
     import { searchSongs, type SearchResult } from '../lib/api';
+    import { searchChordDB, getChordMap, normalizeKey, type ChordHit } from '../lib/chorddb';
     import { getRecents, pushRecent, getOffline } from '../lib/store';
     import { toast } from '../lib/ui';
 
@@ -60,18 +61,39 @@ const base = import.meta.env.BASE_URL;
         ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string
       );
 
-    function rowHTML(r: SearchResult): string {
+    function rowHTML(r: SearchResult, dbHit?: ChordHit): string {
       const art = r.artwork
         ? `<img class="art" src="${esc(r.artwork)}" alt="" loading="lazy">`
         : `<div class="art">🎵</div>`;
       const sub = [r.artist, r.year].filter(Boolean).join(' · ');
-      return `<a class="row" href="${base}/song/?id=${encodeURIComponent(r.id)}">
+      // When the song exists in the chord library, link to the DB chart version
+      // (chords + lyrics embedded), and flag it.
+      const href = dbHit
+        ? `${base}/song/?row=${dbHit.row}&a=${encodeURIComponent(dbHit.artist)}&t=${encodeURIComponent(dbHit.title)}`
+        : `${base}/song/?id=${encodeURIComponent(r.id)}`;
+      const badge = dbHit
+        ? `<span class="key-badge">${esc(dbHit.key)}</span><span class="chord-badge">CHORDS</span>`
+        : '';
+      return `<a class="row" href="${href}">
         ${art}
         <div class="meta">
           <div class="t">${esc(r.title)}</div>
           <div class="s">${esc(sub)}</div>
         </div>
+        ${badge}
         <span class="row-btn" aria-hidden="true">›</span>
+      </a>`;
+    }
+
+    function dbRowHTML(h: ChordHit): string {
+      return `<a class="row" href="${base}/song/?row=${h.row}&a=${encodeURIComponent(h.artist)}&t=${encodeURIComponent(h.title)}">
+        <div class="art">🎵</div>
+        <div class="meta">
+          <div class="t">${esc(h.title)}</div>
+          <div class="s">${esc(h.artist)}</div>
+        </div>
+        <span class="key-badge">${esc(h.key)}</span>
+        <span class="chord-badge">CHORDS</span>
       </a>`;
     }
 
@@ -90,14 +112,44 @@ const base = import.meta.env.BASE_URL;
       status.innerHTML = `<div class="empty">Searching…</div>`;
       const ticket = ++inflight;
       try {
-        const list = await searchSongs(term);
+        const [list, dbHits, chordMap] = await Promise.all([
+          searchSongs(term).catch(() => [] as SearchResult[]),
+          searchChordDB(term, 10).catch(() => [] as ChordHit[]),
+          getChordMap().catch(() => null),
+        ]);
         if (ticket !== inflight) return;
-        if (!list.length) {
+        if (!list.length && !dbHits.length) {
           status.innerHTML = `<div class="empty"><span class="big">🤷</span>No songs found for “${esc(term)}”</div>`;
           return;
         }
         status.innerHTML = '';
-        results.innerHTML = list.map(rowHTML).join('');
+        let html = '';
+        if (dbHits.length) {
+          const deduped = dbHits.filter(
+            (h, i) => dbHits.findIndex((x) => normalizeKey(x.artist + x.title) === normalizeKey(h.artist + h.title)) === i
+          );
+          html += `<div class="section-title">Chord library · ${deduped.length}</div>`;
+          html += deduped.map(dbRowHTML).join('');
+        }
+        if (list.length) {
+          const dbLinked = new Set<string>();
+          for (const h of dbHits) dbLinked.add(normalizeKey(h.artist + h.title));
+          const rows = list
+            .map((r) => {
+              const key = normalizeKey(`${r.artist}${r.title}`);
+              const dbHit = chordMap?.get(`${normalizeKey(r.artist)}|${normalizeKey(r.title)}`);
+              // Drop iTunes rows that are already shown above as DB chord rows.
+              if (dbLinked.has(key)) return '';
+              return rowHTML(r, dbHit);
+            })
+            .filter(Boolean)
+            .join('');
+          if (rows) {
+            html += `<div class="section-title">More results · ${list.length}</div>`;
+            html += rows;
+          }
+        }
+        results.innerHTML = html;
         pushRecent(term);
       } catch {
         if (ticket !== inflight) return;

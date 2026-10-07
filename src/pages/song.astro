@@ -4,13 +4,16 @@ import Base from '../layouts/Base.astro';
 
 <Base title="Song">
   <div class="song-toolbar" id="toolbar">
-    <button class="tool" id="minusBtn" aria-label="Transpose down">−</button>
-    <button class="tool" id="playBtn" aria-label="Auto-scroll">▶</button>
-    <button class="tool" id="plusBtn" aria-label="Transpose up">+</button>
+    <button class="tool pace" id="paceBtn" aria-label="Auto-scroll pace">1.6×</button>
     <span class="key-pill" id="keyPill">—</span>
-    <button class="tool" id="fontBtn" aria-label="Font size">Aa</button>
     <button class="tool" id="capoBtn" aria-label="Capo">Capo</button>
     <button class="tool" id="menuBtn2" aria-label="More">⋮</button>
+  </div>
+
+  <div class="fab-stack" id="fabStack">
+    <button class="tool fab" id="plusBtn" aria-label="Transpose up">▲</button>
+    <button class="tool fab play" id="playBtn" aria-label="Auto-scroll">▶</button>
+    <button class="tool fab" id="minusBtn" aria-label="Transpose down">▼</button>
   </div>
 
   <div class="chart" id="chart"></div>
@@ -18,6 +21,7 @@ import Base from '../layouts/Base.astro';
   <script>
     import { lookupSong, fetchLyrics, type SearchResult } from '../lib/api';
     import { findChart, type Chart } from '../lib/charts';
+    import { loadChartByRow, findChordRow } from '../lib/chorddb';
     import {
       transposeLine,
       keyUsesFlats,
@@ -32,6 +36,7 @@ import Base from '../layouts/Base.astro';
       saveScroll,
       getOfflineSong,
       getSets,
+      getSet,
       addToSet,
       type Song,
     } from '../lib/store';
@@ -42,11 +47,14 @@ import Base from '../layouts/Base.astro';
     const id = params.get('id') ?? '';
     const artistParam = params.get('a') ?? '';
     const titleParam = params.get('t') ?? '';
+    const rowParam = params.get('row') ? Number(params.get('row')) : null;
+    const setContext = params.get('set') ? { id: params.get('set')!, si: Number(params.get('si') ?? -1) } : null;
 
     const chartEl = document.getElementById('chart')!;
     const keyPill = document.getElementById('keyPill')!;
     const playBtn = document.getElementById('playBtn')!;
     const toolbar = document.getElementById('toolbar')!;
+    const fabStack = document.getElementById('fabStack')!;
 
     const esc = (s: string) =>
       s.replace(/[&<>"']/g, (c) =>
@@ -57,14 +65,12 @@ import Base from '../layouts/Base.astro';
     let song: Song = { id: id || `local-${Date.now()}`, title: titleParam, artist: artistParam };
     let lyrics = '';
     let chart: Chart | undefined;
+    let chartFromDB = false; // chart came from the 135k-song database (save its body offline)
     let baseKey = 0; // semitone index of original key (or of last reset)
     let keyName = '';
     let delta = 0; // transpose semitones
     let capo = 0;
-    let fontStep = 0; // -2..+3
     let saved = isOffline(song.id);
-
-    const FONT_SIZES = [13, 14.5, 16, 18, 20.5, 23];
 
     /* ---------- load ---------- */
     chartEl.innerHTML = `<div class="empty"><span class="big">⏳</span>Loading…</div>`;
@@ -74,29 +80,64 @@ import Base from '../layouts/Base.astro';
     async function init() {
       let meta: SearchResult | null = null;
 
+      // DB rows may also arrive via id like "db-<row>" (offline/set links).
+      let dbRow = rowParam;
+      if (dbRow === null && id.startsWith('db-')) dbRow = Number(id.slice(3));
+
       // Offline-first: if we have it saved, render instantly from storage.
-      const cached = id ? getOfflineSong(id) : undefined;
-      if (cached) {
-        song = { id: cached.id, title: cached.title, artist: cached.artist, artwork: cached.artwork };
-        lyrics = cached.lyrics;
-        chart = findChart(cached.artist, cached.title);
+      const cached = song.id && !dbRow ? getOfflineSong(song.id) : undefined;
+      const cachedDb = dbRow !== null ? getOfflineSong(`db-${dbRow}`) : undefined;
+      const hit = cached ?? cachedDb ?? (dbRow !== null ? getOfflineSong(`db-${dbRow}`) : undefined);
+      if (hit) {
+        song = { id: hit.id, title: hit.title, artist: hit.artist, artwork: hit.artwork };
+        lyrics = hit.lyrics;
+        chart = hit.chartKeyName && hit.chartBody
+          ? { keyName: hit.chartKeyName, body: hit.chartBody }
+          : findChart(hit.artist, hit.title);
+        chartFromDB = !!hit.chartKeyName;
         saved = true;
         setTitle();
         applyKeyFromChart();
         render();
-        if (cached.scroll) requestAnimationFrame(() => window.scrollTo(0, cached.scroll!));
+        if (hit.scroll) requestAnimationFrame(() => window.scrollTo(0, hit.scroll!));
         // refresh in background
-        meta = await lookupSong(id).catch(() => null);
-        if (meta) {
-          song = meta;
-          lyrics = (await fetchLyrics(meta.artist, meta.title)) || lyrics;
-          setTitle();
-          render();
+        if (dbRow !== null) {
+          const dbChart = await loadChartByRow(dbRow);
+          if (dbChart) {
+            song = { id: `db-${dbRow}`, title: dbChart.title, artist: dbChart.artist, artwork: song.artwork };
+            chart = { keyName: dbChart.keyName, body: dbChart.body };
+            chartFromDB = true;
+            lyrics = '';
+            setTitle();
+            applyKeyFromChart();
+            render();
+          }
+        } else {
+          meta = await lookupSong(id).catch(() => null);
+          if (meta) {
+            song = meta;
+            setTitle();
+            render();
+          }
         }
         return;
       }
 
-      if (id) {
+      // Direct database row lookup.
+      if (dbRow !== null) {
+        const dbChart = await loadChartByRow(dbRow);
+        if (dbChart) {
+          song = { id: `db-${dbRow}`, title: dbChart.title, artist: dbChart.artist };
+          chart = { keyName: dbChart.keyName, body: dbChart.body };
+          chartFromDB = true;
+          setTitle();
+          applyKeyFromChart();
+          render();
+          return;
+        }
+      }
+
+      if (id && !id.startsWith('db-')) {
         meta = await lookupSong(id).catch(() => null);
       }
 
@@ -108,12 +149,26 @@ import Base from '../layouts/Base.astro';
         return;
       }
 
+      // Bundled chart first; otherwise auto-look-up the chord database by artist+title.
       chart = findChart(song.artist, song.title);
+      if (!chart) {
+        const hit = await findChordRow(song.artist, song.title);
+        if (hit) {
+          const dbChart = await loadChartByRow(hit.row);
+          if (dbChart) {
+            chart = { keyName: dbChart.keyName, body: dbChart.body };
+            chartFromDB = true;
+            song.id = `db-${hit.row}`;
+          }
+        }
+      }
       applyKeyFromChart();
       render();
 
-      lyrics = await fetchLyrics(song.artist, song.title);
-      render();
+      if (!chartFromDB) {
+        lyrics = await fetchLyrics(song.artist, song.title);
+        render();
+      }
     }
 
     function applyKeyFromChart() {
@@ -184,6 +239,10 @@ import Base from '../layouts/Base.astro';
         if (isChordLine) {
           // Capo shifts the shapes down; user transposition still applies on top.
           const shift = capo > 0 ? delta - capo : delta;
+          // Consecutive chord lines (no lyric between) must flush each separately.
+          if (pendingChord) {
+            html += `<div class="cl">${tokenize(pendingChord)}</div>`;
+          }
           pendingChord = transposeLine(line, shift, useFlats);
           continue;
         }
@@ -210,7 +269,7 @@ import Base from '../layouts/Base.astro';
       if (lyrics) {
         chartEl.innerHTML = `<div class="hint">No chord chart bundled for this song yet — showing lyrics.</div><div class="sec">Lyrics</div>${renderLyricsBlock()}`;
       } else {
-        chartEl.innerHTML = `<div class="empty"><span class="big">🎼</span>No chord chart or lyrics for<br><strong>${esc(song.title)}</strong><br><span class="hint">Charts are bundled for popular songs — more are added regularly.</span></div>`;
+        chartEl.innerHTML = `<div class="empty"><span class="big">🎼</span>No chord chart found for<br><strong>${esc(song.title)}</strong><br><span class="hint">Charts come from a 135k-song library — try a slightly different title or artist spelling.</span></div>`;
       }
     }
 
@@ -243,13 +302,9 @@ import Base from '../layouts/Base.astro';
       });
     }
 
-    /* ---------- toolbar: transpose ---------- */
+    /* ---------- bottom-right controls ---------- */
     document.getElementById('minusBtn')!.addEventListener('click', () => {
       if (!chart) return;
-      if (scrolling) {
-        changeSpeed(-1);
-        return;
-      }
       delta -= 1;
       updateKeyPill();
       render();
@@ -258,10 +313,6 @@ import Base from '../layouts/Base.astro';
 
     document.getElementById('plusBtn')!.addEventListener('click', () => {
       if (!chart) return;
-      if (scrolling) {
-        changeSpeed(1);
-        return;
-      }
       delta += 1;
       updateKeyPill();
       render();
@@ -274,6 +325,7 @@ import Base from '../layouts/Base.astro';
     let scrolling = false;
     let rafId = 0;
     let last = 0;
+    const paceBtn = document.getElementById('paceBtn')!;
 
     function tick(ts: number) {
       if (!scrolling) return;
@@ -284,15 +336,18 @@ import Base from '../layouts/Base.astro';
       rafId = requestAnimationFrame(tick);
     }
 
+    function syncPace() {
+      paceBtn.textContent = `${SPEEDS[speedIdx].toFixed(1).replace(/\.0$/, '')}×`;
+    }
+
     function setScrolling(on: boolean) {
       scrolling = on;
       playBtn.textContent = on ? '⏸' : '▶';
       playBtn.classList.toggle('playing', on);
-      toolbar.classList.toggle('scrolling', on);
       if (on) {
         last = 0;
         rafId = requestAnimationFrame(tick);
-        toast(`Auto-scroll ${SPEEDS[speedIdx].toFixed(1)}× — use −/+ for speed`);
+        toast(`Auto-scroll ${SPEEDS[speedIdx].toFixed(1)}× — tune pace with the pace button`);
       } else {
         cancelAnimationFrame(rafId);
       }
@@ -302,27 +357,47 @@ import Base from '../layouts/Base.astro';
       const next = Math.max(0, Math.min(SPEEDS.length - 1, speedIdx + dir));
       if (next === speedIdx) return;
       speedIdx = next;
+      syncPace();
       toast(`Scroll speed ${SPEEDS[speedIdx].toFixed(1)}×`);
     }
 
     playBtn.addEventListener('click', () => setScrolling(!scrolling));
-    // Pause auto-scroll as soon as the user touches the screen.
+    paceBtn.addEventListener('click', () => {
+      if (scrolling) {
+        changeSpeed(1);
+        if (speedIdx === SPEEDS.length - 1) changeSpeed(-SPEEDS.length);
+      } else {
+        openSheet(
+          `<h3>Scroll pace</h3><div class="sheet-list">${SPEEDS.map(
+            (s, i) =>
+              `<button class="sheet-opt" data-idx="${i}">${s.toFixed(1).replace(/\.0$/, '')}×${
+                i === speedIdx ? ' ✓' : ''
+              }</button>`
+          ).join('')}</div>`
+        );
+        document.getElementById('sheetBody')!.addEventListener('click', (e) => {
+          const el = (e.target as HTMLElement).closest('[data-idx]');
+          if (!el) return;
+          speedIdx = Number((el as HTMLElement).dataset.idx);
+          syncPace();
+          closeSheet();
+          toast(`Scroll speed ${SPEEDS[speedIdx].toFixed(1)}×`);
+        });
+      }
+    });
+
+    // Pause auto-scroll when the user touches the song itself (not the controls).
     ['touchstart', 'wheel'].forEach((ev) =>
       window.addEventListener(
         ev,
-        () => {
+        (e) => {
+          const target = e.target as HTMLElement | null;
+          if (target && (target.closest?.('.fab-stack') || target.closest?.('.song-toolbar'))) return;
           if (scrolling) setScrolling(false);
         },
         { passive: true }
       )
     );
-
-    /* ---------- font size ---------- */
-    document.getElementById('fontBtn')!.addEventListener('click', () => {
-      fontStep = (fontStep + 1) % FONT_SIZES.length;
-      document.documentElement.style.setProperty('--chart-size', `${FONT_SIZES[fontStep]}px`);
-      toast(`Text ${FONT_SIZES[fontStep]}px`);
-    });
 
     /* ---------- capo ---------- */
     document.getElementById('capoBtn')!.addEventListener('click', () => {
@@ -379,6 +454,8 @@ import Base from '../layouts/Base.astro';
               ...song,
               lyrics,
               hasChart: !!chart,
+              chartKeyName: chartFromDB && chart ? chart.keyName : undefined,
+              chartBody: chartFromDB && chart ? chart.body : undefined,
               savedAt: Date.now(),
               scroll: Math.round(window.scrollY),
             });
@@ -393,6 +470,8 @@ import Base from '../layouts/Base.astro';
               ...song,
               lyrics,
               hasChart: !!chart,
+              chartKeyName: chartFromDB && chart ? chart.keyName : undefined,
+              chartBody: chartFromDB && chart ? chart.body : undefined,
               savedAt: Date.now(),
               scroll: Math.round(window.scrollY),
             });
@@ -472,12 +551,54 @@ import Base from '../layouts/Base.astro';
         const now = Date.now();
         if (now - lastTap < 300) {
           setSize(16);
-          fontStep = 2;
           toast('Zoom reset');
         }
         lastTap = now;
       },
       { passive: true }
     );
+
+    /* ---------- swipe between songs when opened from a set ---------- */
+    if (setContext) {
+      let sx = 0, sy = 0, tracking = false;
+      chartEl.addEventListener(
+        'touchstart',
+        (e) => {
+          if (e.touches.length === 1) {
+            sx = e.touches[0].clientX;
+            sy = e.touches[0].clientY;
+            tracking = true;
+          }
+        },
+        { passive: true }
+      );
+      chartEl.addEventListener(
+        'touchend',
+        (e) => {
+          if (!tracking || !e.changedTouches.length) return;
+          tracking = false;
+          const dx = e.changedTouches[0].clientX - sx;
+          const dy = e.changedTouches[0].clientY - sy;
+          if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+          const set = getSet(setContext.id);
+          if (!set) return;
+          // Derive the current position from the live set order (the URL's
+          // &si= can be stale after the set was reordered).
+          const cur = set.songs.findIndex((s) => s.id === song.id);
+          if (cur < 0) return;
+          const dir = dx < 0 ? 1 : -1; // swipe left → next song
+          const target = cur + dir;
+          const song2 = set.songs[target];
+          if (!song2) {
+            toast(dir > 0 ? 'Last song in set' : 'First song in set');
+            return;
+          }
+          const url = `${base}/song/?id=${encodeURIComponent(song2.id)}&a=${encodeURIComponent(song2.artist)}&t=${encodeURIComponent(song2.title)}&set=${encodeURIComponent(set.id)}&si=${target}`;
+          location.href = url;
+        },
+        { passive: true }
+      );
+      toast('Swipe ←/→ to change songs in this set');
+    }
   </script>
 </Base>

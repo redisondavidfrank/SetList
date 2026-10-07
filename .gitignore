@@ -4,6 +4,8 @@ dist/
 
 # source datasets (downloaded, not committed)
 data/
+# ...but the build-time search index under public/ must be committed
+!public/data/
 
 # dependencies
 node_modules/

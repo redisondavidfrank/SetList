@@ -1,6 +1,6 @@
 /* SetList service worker: cache-first for the app shell, network-first for APIs. */
-const VERSION = 'setlist-v1';
-const SHELL = ['./', './index.html', './sets/', './offline/', './chords/', './scales/'];
+const VERSION = 'setlist-v2';
+const SHELL = ['./', './index.html', './sets/', './offline/', './chords/', './scales/', './data/chordidx.json.gz', './data/chordidx.json'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
@@ -24,7 +24,10 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET') return;
 
-  const isAPI = url.hostname === 'itunes.apple.com' || url.hostname === 'lrclib.net';
+  const isAPI =
+    url.hostname === 'itunes.apple.com' ||
+    url.hostname === 'lrclib.net' ||
+    url.hostname === 'datasets-server.huggingface.co';
 
   if (isAPI) {
     // Network-first, fall back to cache when offline.
