@@ -1,0 +1,483 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base title="Song">
+  <div class="song-toolbar" id="toolbar">
+    <button class="tool" id="minusBtn" aria-label="Transpose down">−</button>
+    <button class="tool" id="playBtn" aria-label="Auto-scroll">▶</button>
+    <button class="tool" id="plusBtn" aria-label="Transpose up">+</button>
+    <span class="key-pill" id="keyPill">—</span>
+    <button class="tool" id="fontBtn" aria-label="Font size">Aa</button>
+    <button class="tool" id="capoBtn" aria-label="Capo">Capo</button>
+    <button class="tool" id="menuBtn2" aria-label="More">⋮</button>
+  </div>
+
+  <div class="chart" id="chart"></div>
+
+  <script>
+    import { lookupSong, fetchLyrics, type SearchResult } from '../lib/api';
+    import { findChart, type Chart } from '../lib/charts';
+    import {
+      transposeLine,
+      keyUsesFlats,
+      NOTE_INDEX,
+      chordDiagramSVG,
+      parseChord,
+    } from '../lib/music';
+    import {
+      saveOffline,
+      removeOffline,
+      isOffline,
+      saveScroll,
+      getOfflineSong,
+      getSets,
+      addToSet,
+      type Song,
+    } from '../lib/store';
+    import { toast, openSheet, closeSheet } from '../lib/ui';
+
+    const base = import.meta.env.BASE_URL;
+    const params = new URLSearchParams(location.search);
+    const id = params.get('id') ?? '';
+    const artistParam = params.get('a') ?? '';
+    const titleParam = params.get('t') ?? '';
+
+    const chartEl = document.getElementById('chart')!;
+    const keyPill = document.getElementById('keyPill')!;
+    const playBtn = document.getElementById('playBtn')!;
+    const toolbar = document.getElementById('toolbar')!;
+
+    const esc = (s: string) =>
+      s.replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string
+      );
+
+    /* ---------- state ---------- */
+    let song: Song = { id: id || `local-${Date.now()}`, title: titleParam, artist: artistParam };
+    let lyrics = '';
+    let chart: Chart | undefined;
+    let baseKey = 0; // semitone index of original key (or of last reset)
+    let keyName = '';
+    let delta = 0; // transpose semitones
+    let capo = 0;
+    let fontStep = 0; // -2..+3
+    let saved = isOffline(song.id);
+
+    const FONT_SIZES = [13, 14.5, 16, 18, 20.5, 23];
+
+    /* ---------- load ---------- */
+    chartEl.innerHTML = `<div class="empty"><span class="big">⏳</span>Loading…</div>`;
+
+    init();
+
+    async function init() {
+      let meta: SearchResult | null = null;
+
+      // Offline-first: if we have it saved, render instantly from storage.
+      const cached = id ? getOfflineSong(id) : undefined;
+      if (cached) {
+        song = { id: cached.id, title: cached.title, artist: cached.artist, artwork: cached.artwork };
+        lyrics = cached.lyrics;
+        chart = findChart(cached.artist, cached.title);
+        saved = true;
+        setTitle();
+        applyKeyFromChart();
+        render();
+        if (cached.scroll) requestAnimationFrame(() => window.scrollTo(0, cached.scroll!));
+        // refresh in background
+        meta = await lookupSong(id).catch(() => null);
+        if (meta) {
+          song = meta;
+          lyrics = (await fetchLyrics(meta.artist, meta.title)) || lyrics;
+          setTitle();
+          render();
+        }
+        return;
+      }
+
+      if (id) {
+        meta = await lookupSong(id).catch(() => null);
+      }
+
+      if (meta) {
+        song = meta;
+        setTitle();
+      } else if (!song.title) {
+        chartEl.innerHTML = `<div class="empty"><span class="big">🤷</span>Song not found.<br><a class="btn" style="margin-top:14px" href="${base}/">Back to search</a></div>`;
+        return;
+      }
+
+      chart = findChart(song.artist, song.title);
+      applyKeyFromChart();
+      render();
+
+      lyrics = await fetchLyrics(song.artist, song.title);
+      render();
+    }
+
+    function applyKeyFromChart() {
+      if (chart) {
+        keyName = chart.keyName;
+        // keyName may be "Am" — strip a trailing "m" to get the root note.
+        const root = keyName.replace(/m$/, '');
+        baseKey = NOTE_INDEX[root] ?? 0;
+      } else {
+        keyName = '';
+        baseKey = 0;
+      }
+      delta = 0;
+      updateKeyPill();
+    }
+
+    function setTitle() {
+      document.title = `${song.title} · SetList`;
+      document.getElementById('pageTitle')!.textContent = song.title;
+    }
+
+    function updateKeyPill() {
+      if (!chart) {
+        keyPill.textContent = 'No chords';
+        return;
+      }
+      const idx = (baseKey + delta + 120) % 12;
+      const flats = keyUsesFlats(idx);
+      const names = flats
+        ? ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B']
+        : ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+      keyPill.textContent = `Key: ${names[idx]}${capo ? ` +capo${capo}` : ''}`;
+    }
+
+    /* ---------- rendering ---------- */
+    function render() {
+      if (!chart) {
+        renderLyricsOnly();
+        return;
+      }
+      const useFlats = keyUsesFlats((baseKey + delta + 120) % 12);
+      let html = '';
+      if (capo > 0) {
+        html += `<div class="capo-note">Capo ${capo} — sounds in ${keyPill.textContent.replace('Key: ', '').replace(` +capo${capo}`, '')}; shapes shown below.</div>`;
+      }
+      const lines = chart.body.split('\n');
+      let pendingChord = '';
+      let firstNonEmpty = true;
+      for (const raw of lines) {
+        const line = raw.trimEnd();
+        if (!line.trim()) continue;
+        if (line.startsWith('#')) {
+          const t = line.slice(1).trim();
+          // First line of a chart body is the key marker (e.g. "#G", "#Am").
+          if (firstNonEmpty && /^[A-G][#b]?m?$/.test(t)) {
+            firstNonEmpty = false;
+            continue;
+          }
+          firstNonEmpty = false;
+          html += `<div class="sec">${esc(t)}</div>`;
+          continue;
+        }
+        firstNonEmpty = false;
+        const isChordLine = line
+          .trim()
+          .split(/\s+/)
+          .every((tok) => parseChord(tok));
+        if (isChordLine) {
+          // Capo shifts the shapes down; user transposition still applies on top.
+          const shift = capo > 0 ? delta - capo : delta;
+          pendingChord = transposeLine(line, shift, useFlats);
+          continue;
+        }
+        if (pendingChord) {
+          html += `<div class="cl">${tokenize(pendingChord)}</div>`;
+          pendingChord = '';
+        }
+        html += `<div class="ly">${esc(line)}</div>`;
+      }
+      if (pendingChord) html += `<div class="cl">${tokenize(pendingChord)}</div>`;
+      if (lyrics && !chart.body.includes(cleanLyricStart())) {
+        html += `<div class="sec">Lyrics</div>${renderLyricsBlock()}`;
+      }
+      chartEl.innerHTML = html;
+      wireChordTaps();
+    }
+
+    function cleanLyricStart() {
+      const first = (lyrics.split('\n').find((l) => l.trim().length > 8) ?? '').trim();
+      return first.slice(0, 24);
+    }
+
+    function renderLyricsOnly() {
+      if (lyrics) {
+        chartEl.innerHTML = `<div class="hint">No chord chart bundled for this song yet — showing lyrics.</div><div class="sec">Lyrics</div>${renderLyricsBlock()}`;
+      } else {
+        chartEl.innerHTML = `<div class="empty"><span class="big">🎼</span>No chord chart or lyrics for<br><strong>${esc(song.title)}</strong><br><span class="hint">Charts are bundled for popular songs — more are added regularly.</span></div>`;
+      }
+    }
+
+    function renderLyricsBlock(): string {
+      return lyrics
+        .split(/\n{2,}/)
+        .map((stanza) => stanza.split('\n').map((l) => `<div class="ly">${esc(l)}</div>`).join(''))
+        .join('');
+    }
+
+    function tokenize(line: string): string {
+      return line
+        .split(/(\s+)/)
+        .map((part) =>
+          /^\s+$/.test(part) ? part : `<span class="ch" data-chord="${esc(part)}">${esc(part)}</span>`
+        )
+        .join('');
+    }
+
+    function wireChordTaps() {
+      chartEl.querySelectorAll('.ch').forEach((el) => {
+        el.addEventListener('click', () => {
+          const name = (el as HTMLElement).dataset.chord!;
+          openSheet(
+            `<h3 style="font-family:ui-monospace,monospace">${esc(name)}</h3>
+             <div style="padding:6px 0 14px">${chordDiagramSVG(name, 160)}</div>
+             <div class="hint" style="text-align:center">Fingering for ${esc(name)} in the current key</div>`
+          );
+        });
+      });
+    }
+
+    /* ---------- toolbar: transpose ---------- */
+    document.getElementById('minusBtn')!.addEventListener('click', () => {
+      if (!chart) return;
+      if (scrolling) {
+        changeSpeed(-1);
+        return;
+      }
+      delta -= 1;
+      updateKeyPill();
+      render();
+      toast(keyPill.textContent!);
+    });
+
+    document.getElementById('plusBtn')!.addEventListener('click', () => {
+      if (!chart) return;
+      if (scrolling) {
+        changeSpeed(1);
+        return;
+      }
+      delta += 1;
+      updateKeyPill();
+      render();
+      toast(keyPill.textContent!);
+    });
+
+    /* ---------- auto-scroll ---------- */
+    const SPEEDS = [0.3, 0.6, 1, 1.6, 2.4, 3.6, 5.4];
+    let speedIdx = 3;
+    let scrolling = false;
+    let rafId = 0;
+    let last = 0;
+
+    function tick(ts: number) {
+      if (!scrolling) return;
+      if (!last) last = ts;
+      const dt = Math.min(64, ts - last);
+      last = ts;
+      window.scrollBy(0, SPEEDS[speedIdx] * (dt / 16.67));
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function setScrolling(on: boolean) {
+      scrolling = on;
+      playBtn.textContent = on ? '⏸' : '▶';
+      playBtn.classList.toggle('playing', on);
+      toolbar.classList.toggle('scrolling', on);
+      if (on) {
+        last = 0;
+        rafId = requestAnimationFrame(tick);
+        toast(`Auto-scroll ${SPEEDS[speedIdx].toFixed(1)}× — use −/+ for speed`);
+      } else {
+        cancelAnimationFrame(rafId);
+      }
+    }
+
+    function changeSpeed(dir: -1 | 1) {
+      const next = Math.max(0, Math.min(SPEEDS.length - 1, speedIdx + dir));
+      if (next === speedIdx) return;
+      speedIdx = next;
+      toast(`Scroll speed ${SPEEDS[speedIdx].toFixed(1)}×`);
+    }
+
+    playBtn.addEventListener('click', () => setScrolling(!scrolling));
+    // Pause auto-scroll as soon as the user touches the screen.
+    ['touchstart', 'wheel'].forEach((ev) =>
+      window.addEventListener(
+        ev,
+        () => {
+          if (scrolling) setScrolling(false);
+        },
+        { passive: true }
+      )
+    );
+
+    /* ---------- font size ---------- */
+    document.getElementById('fontBtn')!.addEventListener('click', () => {
+      fontStep = (fontStep + 1) % FONT_SIZES.length;
+      document.documentElement.style.setProperty('--chart-size', `${FONT_SIZES[fontStep]}px`);
+      toast(`Text ${FONT_SIZES[fontStep]}px`);
+    });
+
+    /* ---------- capo ---------- */
+    document.getElementById('capoBtn')!.addEventListener('click', () => {
+      const opts = [0, 1, 2, 3, 4, 5, 6, 7]
+        .map(
+          (c) =>
+            `<button class="sheet-opt" data-capo="${c}">${c === 0 ? 'No capo' : `Capo ${c}`}${
+              capo === c ? ' ✓' : ''
+            }</button>`
+        )
+        .join('');
+      openSheet(`<h3>Capo</h3><div class="sheet-list">${opts}</div>`);
+      document.getElementById('sheetBody')!.addEventListener('click', (e) => {
+        const el = (e.target as HTMLElement).closest('[data-capo]');
+        if (!el) return;
+        capo = Number((el as HTMLElement).dataset.capo);
+        closeSheet();
+        updateKeyPill();
+        render();
+        toast(capo ? `Capo ${capo}` : 'Capo removed');
+      });
+    });
+
+    /* ---------- overflow menu: save / add to set / bookmark ---------- */
+    document.getElementById('menuBtn2')!.addEventListener('click', () => {
+      const sets = getSets();
+      const setOpts = sets.length
+        ? sets
+            .map(
+              (s) =>
+                `<button class="sheet-opt" data-set="${s.id}">📚 Add to “${esc(s.name)}”</button>`
+            )
+            .join('')
+        : '';
+      openSheet(
+        `<h3>${esc(song.title)}</h3>
+         <div class="sheet-list">
+           <button class="sheet-opt" id="saveBtn">${saved ? '⬇️ Remove offline save' : '⬇️ Save offline'}</button>
+           <button class="sheet-opt" id="bookmarkBtn">🔖 Bookmark my position</button>
+           ${setOpts}
+           <button class="sheet-opt" id="shareBtn">🔗 Copy link</button>
+         </div>`
+      );
+      const body = document.getElementById('sheetBody')!;
+      body.addEventListener('click', async (e) => {
+        const t = e.target as HTMLElement;
+        if (t.closest('#saveBtn')) {
+          if (saved) {
+            removeOffline(song.id);
+            saved = false;
+            toast('Removed from offline');
+          } else {
+            saveOffline({
+              ...song,
+              lyrics,
+              hasChart: !!chart,
+              savedAt: Date.now(),
+              scroll: Math.round(window.scrollY),
+            });
+            saved = true;
+            toast('Saved for offline use ✓');
+          }
+          closeSheet();
+        } else if (t.closest('#bookmarkBtn')) {
+          saveScroll(song.id, Math.round(window.scrollY));
+          if (!saved) {
+            saveOffline({
+              ...song,
+              lyrics,
+              hasChart: !!chart,
+              savedAt: Date.now(),
+              scroll: Math.round(window.scrollY),
+            });
+            saved = true;
+          }
+          toast('Position bookmarked 🔖');
+          closeSheet();
+        } else if (t.closest('[data-set]')) {
+          const setId = (t.closest('[data-set]') as HTMLElement).dataset.set!;
+          const added = addToSet(setId, song);
+          toast(added ? 'Added to set ✓' : 'Already in that set');
+          closeSheet();
+        } else if (t.closest('#shareBtn')) {
+          try {
+            await navigator.clipboard.writeText(location.href);
+            toast('Link copied');
+          } catch {
+            toast('Copy not available');
+          }
+          closeSheet();
+        }
+      });
+    });
+
+    // Periodic scroll save for offline users
+    let scrollTimer: number | undefined;
+    window.addEventListener(
+      'scroll',
+      () => {
+        clearTimeout(scrollTimer);
+        scrollTimer = window.setTimeout(() => {
+          if (saved) saveScroll(song.id, Math.round(window.scrollY));
+        }, 1500);
+      },
+      { passive: true }
+    );
+
+    /* ---------- pinch to zoom + double-tap reset ---------- */
+    let startDist = 0;
+    let startSize = 16;
+    const getSize = () =>
+      parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--chart-size')) || 16;
+    const setSize = (px: number) =>
+      document.documentElement.style.setProperty('--chart-size', `${px.toFixed(1)}px`);
+
+    document.addEventListener(
+      'touchstart',
+      (e) => {
+        if (e.touches.length === 2) {
+          const [a, b] = e.touches;
+          startDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+          startSize = getSize();
+        }
+      },
+      { passive: true }
+    );
+    document.addEventListener(
+      'touchmove',
+      (e) => {
+        if (e.touches.length === 2 && startDist) {
+          const [a, b] = e.touches;
+          const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+          setSize(Math.max(10, Math.min(30, startSize * (dist / startDist))));
+        }
+      },
+      { passive: true }
+    );
+    document.addEventListener('touchend', () => {
+      startDist = 0;
+    }, { passive: true });
+
+    // Double-tap resets zoom
+    let lastTap = 0;
+    chartEl.addEventListener(
+      'touchend',
+      () => {
+        const now = Date.now();
+        if (now - lastTap < 300) {
+          setSize(16);
+          fontStep = 2;
+          toast('Zoom reset');
+        }
+        lastTap = now;
+      },
+      { passive: true }
+    );
+  </script>
+</Base>

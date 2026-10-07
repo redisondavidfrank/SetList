@@ -1,0 +1,19 @@
+{
+  "name": "SetList — songs, chords & set lists",
+  "short_name": "SetList",
+  "description": "Browse songs, view chord charts, transpose, and build set lists. Works offline.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#10b981",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

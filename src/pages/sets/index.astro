@@ -1,0 +1,140 @@
+---
+import Base from '../../layouts/Base.astro';
+---
+
+<Base title="My Song Sets">
+  <div id="setsList" class="rows"></div>
+
+  <div style="margin-top:18px; display:flex; gap:8px">
+    <input class="field" id="newSetName" placeholder="New set name…" maxlength="40" />
+    <button class="btn primary" id="createSet">Create</button>
+  </div>
+
+  <div class="hint" id="detailHint" style="display:none">
+    <a href="#" id="backLink">‹ All sets</a>
+  </div>
+  <div id="setDetail"></div>
+
+  <script>
+    import {
+      getSets,
+      createSet,
+      deleteSet,
+      getSet,
+      removeFromSet,
+      moveSong,
+    } from '../../lib/store';
+    import { esc } from '../../lib/util';
+    import { toast } from '../../lib/ui';
+
+    const base = import.meta.env.BASE_URL;
+    const listEl = document.getElementById('setsList')!;
+    const detailEl = document.getElementById('setDetail')!;
+    const hintEl = document.getElementById('detailHint')!;
+
+    function renderList() {
+      detailEl.innerHTML = '';
+      hintEl.style.display = 'none';
+      const sets = getSets();
+      if (!sets.length) {
+        listEl.innerHTML = `<div class="empty"><span class="big">📚</span>No sets yet.<br>Create one below, then add songs from any song page (⋮ menu).</div>`;
+        return;
+      }
+      listEl.innerHTML = sets
+        .map(
+          (s) => `<a class="row" href="?set=${s.id}">
+            <div class="art">📚</div>
+            <div class="meta">
+              <div class="t">${esc(s.name)}</div>
+              <div class="s">${s.songs.length} song${s.songs.length === 1 ? '' : 's'}</div>
+            </div>
+            <span class="row-btn">›</span>
+          </a>`
+        )
+        .join('');
+    }
+
+    function renderDetail(setId: string) {
+      const set = getSet(setId);
+      if (!set) return renderList();
+      listEl.innerHTML = '';
+      hintEl.style.display = '';
+      (document.getElementById('backLink') as HTMLAnchorElement).onclick = (e) => {
+        e.preventDefault();
+        history.replaceState(null, '', location.pathname);
+        renderList();
+      };
+
+      const songs = set.songs.length
+        ? set.songs
+            .map(
+              (song, i) => `<div class="row">
+                <div class="art">${i + 1}</div>
+                <a class="meta" href="${base}/song/?id=${encodeURIComponent(song.id)}&a=${encodeURIComponent(song.artist)}&t=${encodeURIComponent(song.title)}" style="text-align:left">
+                  <div class="t">${esc(song.title)}</div>
+                  <div class="s">${esc(song.artist)}</div>
+                </a>
+                <div class="row-actions">
+                  <button class="row-btn" data-up="${song.id}" ${i === 0 ? 'disabled' : ''}>↑</button>
+                  <button class="row-btn" data-down="${song.id}" ${i === set.songs.length - 1 ? 'disabled' : ''}>↓</button>
+                  <button class="row-btn" data-del="${song.id}">✕</button>
+                </div>
+              </div>`
+            )
+            .join('')
+        : `<div class="empty"><span class="big">🎵</span>This set is empty.<br>Open a song and use ⋮ → “Add to set”.</div>`;
+
+      detailEl.innerHTML = `
+        <div class="section-title">${esc(set.name)} · ${set.songs.length} songs</div>
+        <div class="rows">${songs}</div>
+        ${
+          set.songs.length
+            ? `<button class="btn danger sm" id="delSet" style="margin-top:16px">Delete this set</button>`
+            : ''
+        }`;
+
+      detailEl.querySelectorAll('[data-del]').forEach((b) =>
+        b.addEventListener('click', () => {
+          removeFromSet(set.id, (b as HTMLElement).dataset.del!);
+          renderDetail(set.id);
+          toast('Removed');
+        })
+      );
+      detailEl.querySelectorAll('[data-up]').forEach((b) =>
+        b.addEventListener('click', () => {
+          moveSong(set.id, (b as HTMLElement).dataset.up!, -1);
+          renderDetail(set.id);
+        })
+      );
+      detailEl.querySelectorAll('[data-down]').forEach((b) =>
+        b.addEventListener('click', () => {
+          moveSong(set.id, (b as HTMLElement).dataset.down!, 1);
+          renderDetail(set.id);
+        })
+      );
+      document.getElementById('delSet')?.addEventListener('click', () => {
+        if (confirm(`Delete “${set.name}”?`)) {
+          deleteSet(set.id);
+          history.replaceState(null, '', location.pathname);
+          renderList();
+          toast('Set deleted');
+        }
+      });
+    }
+
+    document.getElementById('createSet')!.addEventListener('click', () => {
+      const input = document.getElementById('newSetName') as HTMLInputElement;
+      if (!input.value.trim()) return toast('Name your set first');
+      const s = createSet(input.value);
+      input.value = '';
+      location.search = `?set=${s.id}`;
+    });
+    document.getElementById('newSetName')!.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('createSet')!.click();
+    });
+
+    const initial = new URLSearchParams(location.search).get('set');
+    if (initial) renderDetail(initial);
+    else renderList();
+  </script>
+</Base>

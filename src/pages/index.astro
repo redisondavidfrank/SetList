@@ -1,0 +1,160 @@
+---
+import Base from '../layouts/Base.astro';
+import { CHART_LIST } from '../lib/charts';
+const base = import.meta.env.BASE_URL;
+---
+
+<Base title="Home">
+  <div class="searchbox">
+    <span style="color:var(--muted)">🔍</span>
+    <input id="q" type="search" placeholder="Search songs..." autocomplete="off" enterkeyhint="search" />
+    <button class="row-btn" id="searchBtn" aria-label="Search">⌕</button>
+  </div>
+
+  <div class="cards">
+    <a class="card" href={`${base}/sets/`}><span class="ico">📚</span>Song Sets</a>
+    <a class="card" href={`${base}/chords/`}><span class="ico">🎸</span>Chords</a>
+    <a class="card" href={`${base}/scales/`}><span class="ico">🎼</span>Scales</a>
+  </div>
+
+  <div id="status"></div>
+  <div class="rows" id="results"></div>
+
+  <div id="homeSections">
+    <div class="section-title" id="recentsTitle" style="display:none">Recent searches</div>
+    <div class="picker-row" id="recents"></div>
+
+    <div class="section-title">Chord charts included</div>
+    <div class="rows">
+      {
+        CHART_LIST.map((c) => (
+          <a class="row" href={`${base}/song/?a=${encodeURIComponent(c.artist)}&t=${encodeURIComponent(c.title)}`}>
+            <div class="art">🎵</div>
+            <div class="meta">
+              <div class="t">{c.title}</div>
+              <div class="s">{c.artist}</div>
+            </div>
+            <span class="key-badge">CHORDS</span>
+          </a>
+        ))
+      }
+    </div>
+
+    <div class="section-title">Recently saved offline</div>
+    <div class="rows" id="offlineRow"></div>
+  </div>
+
+  <script>
+    import { searchSongs, type SearchResult } from '../lib/api';
+    import { getRecents, pushRecent, getOffline } from '../lib/store';
+    import { toast } from '../lib/ui';
+
+    const base = import.meta.env.BASE_URL;
+    const q = document.getElementById('q') as HTMLInputElement;
+    const results = document.getElementById('results')!;
+    const status = document.getElementById('status')!;
+    const homeSections = document.getElementById('homeSections')!;
+
+    const esc = (s: string) =>
+      s.replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string
+      );
+
+    function rowHTML(r: SearchResult): string {
+      const art = r.artwork
+        ? `<img class="art" src="${esc(r.artwork)}" alt="" loading="lazy">`
+        : `<div class="art">🎵</div>`;
+      const sub = [r.artist, r.year].filter(Boolean).join(' · ');
+      return `<a class="row" href="${base}/song/?id=${encodeURIComponent(r.id)}">
+        ${art}
+        <div class="meta">
+          <div class="t">${esc(r.title)}</div>
+          <div class="s">${esc(sub)}</div>
+        </div>
+        <span class="row-btn" aria-hidden="true">›</span>
+      </a>`;
+    }
+
+    let timer: number | undefined;
+    let inflight = 0;
+
+    async function runSearch() {
+      const term = q.value.trim();
+      if (term.length < 2) {
+        results.innerHTML = '';
+        status.innerHTML = '';
+        homeSections.style.display = '';
+        return;
+      }
+      homeSections.style.display = 'none';
+      status.innerHTML = `<div class="empty">Searching…</div>`;
+      const ticket = ++inflight;
+      try {
+        const list = await searchSongs(term);
+        if (ticket !== inflight) return;
+        if (!list.length) {
+          status.innerHTML = `<div class="empty"><span class="big">🤷</span>No songs found for “${esc(term)}”</div>`;
+          return;
+        }
+        status.innerHTML = '';
+        results.innerHTML = list.map(rowHTML).join('');
+        pushRecent(term);
+      } catch {
+        if (ticket !== inflight) return;
+        status.innerHTML = `<div class="empty"><span class="big">⚠️</span>Search failed — check your connection</div>`;
+      }
+    }
+
+    q.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = window.setTimeout(runSearch, 350);
+    });
+    q.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        clearTimeout(timer);
+        runSearch();
+        q.blur();
+      }
+    });
+    document.getElementById('searchBtn')!.addEventListener('click', () => {
+      clearTimeout(timer);
+      runSearch();
+    });
+
+    // Recents
+    const recents = getRecents();
+    if (recents.length) {
+      document.getElementById('recentsTitle')!.style.display = '';
+      document.getElementById('recents')!.innerHTML = recents
+        .map((r) => `<button class="pill" data-term="${esc(r)}">${esc(r)}</button>`)
+        .join('');
+      document.getElementById('recents')!.addEventListener('click', (e) => {
+        const el = (e.target as HTMLElement).closest('.pill');
+        if (!el) return;
+        q.value = (el as HTMLElement).dataset.term!;
+        runSearch();
+      });
+    }
+
+    // Offline shortcuts on home
+    const offline = getOffline().slice(0, 5);
+    const offlineRow = document.getElementById('offlineRow')!;
+    if (!offline.length) {
+      offlineRow.innerHTML = `<div class="hint">Nothing saved yet — open a song and tap ⬇️ to keep it offline.</div>`;
+    } else {
+      offlineRow.innerHTML = offline
+        .map(
+          (s) => `<a class="row" href="${base}/song/?id=${encodeURIComponent(s.id)}">
+            <div class="art">⬇️</div>
+            <div class="meta">
+              <div class="t">${esc(s.title)}</div>
+              <div class="s">${esc(s.artist)}</div>
+            </div>
+          </a>`
+        )
+        .join('');
+    }
+
+    void toast;
+  </script>
+</Base>

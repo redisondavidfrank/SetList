@@ -1,0 +1,83 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base title="Chord Library">
+  <div class="section-title">Root note</div>
+  <div class="picker-row" id="roots"></div>
+
+  <div class="section-title">Quality</div>
+  <div class="picker-row" id="qualities"></div>
+
+  <div class="diagram-wrap">
+    <div class="dname" id="dName">C</div>
+    <div id="dDiagram"></div>
+    <div class="hint" id="dHint"></div>
+  </div>
+
+  <script>
+    import { chordDiagramSVG } from '../lib/music';
+
+    const ROOTS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const FLAT_ROOTS = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
+    const QUALITIES: Array<{ label: string; suffix: string }> = [
+      { label: 'Major', suffix: '' },
+      { label: 'Minor', suffix: 'm' },
+      { label: '7', suffix: '7' },
+      { label: 'maj7', suffix: 'maj7' },
+      { label: 'm7', suffix: 'm7' },
+      { label: 'sus2', suffix: 'sus2' },
+      { label: 'sus4', suffix: 'sus4' },
+      { label: '6', suffix: '6' },
+      { label: 'dim', suffix: 'dim' },
+      { label: 'aug', suffix: 'aug' },
+      { label: 'add9', suffix: 'add9' },
+      { label: 'm6', suffix: 'm6' },
+      { label: 'm7b5', suffix: 'm7b5' },
+    ];
+
+    let root = 0;
+    let q = 0;
+
+    const rootsEl = document.getElementById('roots')!;
+    const qualsEl = document.getElementById('qualities')!;
+    const nameEl = document.getElementById('dName')!;
+    const diagEl = document.getElementById('dDiagram')!;
+    const hintEl = document.getElementById('dHint')!;
+
+    rootsEl.innerHTML = FLAT_ROOTS.map(
+      (r, i) => `<button class="pill${i === 0 ? ' on' : ''}" data-r="${i}">${r}</button>`
+    ).join('');
+    qualsEl.innerHTML = QUALITIES.map(
+      (qq, i) => `<button class="pill${i === 0 ? ' on' : ''}" data-q="${i}">${qq.label}</button>`
+    ).join('');
+
+    function show() {
+      const name = `${FLAT_ROOTS[root]}${QUALITIES[q].suffix}`;
+      nameEl.textContent = name;
+      const svg = chordDiagramSVG(name, 170);
+      diagEl.innerHTML = svg;
+      const has = svg.includes('<svg');
+      hintEl.textContent = has
+        ? `${ROOTS[root]}${QUALITIES[q].suffix} — dots are finger positions, ○ open string, ✕ muted`
+        : 'No movable shape for this one yet — try another quality.';
+      rootsEl.querySelectorAll('.pill').forEach((p, i) => p.classList.toggle('on', i === root));
+      qualsEl.querySelectorAll('.pill').forEach((p, i) => p.classList.toggle('on', i === q));
+    }
+
+    rootsEl.addEventListener('click', (e) => {
+      const el = (e.target as HTMLElement).closest('[data-r]');
+      if (!el) return;
+      root = Number((el as HTMLElement).dataset.r);
+      show();
+    });
+    qualsEl.addEventListener('click', (e) => {
+      const el = (e.target as HTMLElement).closest('[data-q]');
+      if (!el) return;
+      q = Number((el as HTMLElement).dataset.q);
+      show();
+    });
+
+    show();
+  </script>
+</Base>

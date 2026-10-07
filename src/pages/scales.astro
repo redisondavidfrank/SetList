@@ -1,0 +1,64 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base title="Scale Library">
+  <div class="section-title">Root note</div>
+  <div class="picker-row" id="roots"></div>
+
+  <div class="section-title">Scale</div>
+  <div class="picker-row" id="scales"></div>
+
+  <div class="section-title">Fretboard</div>
+  <div id="board" style="overflow-x:auto; padding:6px 0"></div>
+  <div class="hint" id="scaleInfo"></div>
+
+  <script>
+    import { fretboardSVG, SCALES } from '../lib/music';
+
+    const FLAT_ROOTS = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
+    const scaleNames = Object.keys(SCALES);
+
+    let root = 9; // A
+    let si = 5; // minor pentatonic
+
+    const rootsEl = document.getElementById('roots')!;
+    const scalesEl = document.getElementById('scales')!;
+    const boardEl = document.getElementById('board')!;
+    const infoEl = document.getElementById('scaleInfo')!;
+
+    rootsEl.innerHTML = FLAT_ROOTS.map(
+      (r, i) => `<button class="pill${i === root ? ' on' : ''}" data-r="${i}">${r}</button>`
+    ).join('');
+    scalesEl.innerHTML = scaleNames
+      .map((s, i) => `<button class="pill${i === si ? ' on' : ''}" data-s="${i}">${s}</button>`)
+      .join('');
+
+    function show() {
+      const name = scaleNames[si];
+      const intervals = SCALES[name];
+      boardEl.innerHTML = fretboardSVG(root, intervals, 12);
+      const notes = intervals
+        .map((iv) => FLAT_ROOTS[(root + iv) % 12])
+        .join(' · ');
+      infoEl.innerHTML = `<strong>${FLAT_ROOTS[root]} ${name}</strong><br>Notes: ${notes}<br>Green dot = root note. Scroll the board sideways for higher frets.`;
+      rootsEl.querySelectorAll('.pill').forEach((p, i) => p.classList.toggle('on', i === root));
+      scalesEl.querySelectorAll('.pill').forEach((p, i) => p.classList.toggle('on', i === si));
+    }
+
+    rootsEl.addEventListener('click', (e) => {
+      const el = (e.target as HTMLElement).closest('[data-r]');
+      if (!el) return;
+      root = Number((el as HTMLElement).dataset.r);
+      show();
+    });
+    scalesEl.addEventListener('click', (e) => {
+      const el = (e.target as HTMLElement).closest('[data-s]');
+      if (!el) return;
+      si = Number((el as HTMLElement).dataset.s);
+      show();
+    });
+
+    show();
+  </script>
+</Base>

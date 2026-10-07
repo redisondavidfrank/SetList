@@ -1,0 +1,47 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base title="Offline Songs">
+  <div id="offlineList" class="rows"></div>
+
+  <script>
+    import { getOffline, removeOffline } from '../lib/store';
+    import { esc } from '../lib/util';
+    import { toast } from '../lib/ui';
+
+    const base = import.meta.env.BASE_URL;
+    const el = document.getElementById('offlineList')!;
+
+    function render() {
+      const songs = getOffline();
+      if (!songs.length) {
+        el.innerHTML = `<div class="empty"><span class="big">⬇️</span>Nothing saved offline yet.<br><span class="hint">Open any song and use ⋮ → “Save offline” to read it without a connection.</span></div>`;
+        return;
+      }
+      el.innerHTML =
+        `<div class="hint">${songs.length} song${songs.length === 1 ? '' : 's'} available without a connection.</div>` +
+        songs
+          .map(
+            (s) => `<div class="row">
+              <a class="meta" href="${base}/song/?id=${encodeURIComponent(s.id)}" style="text-align:left">
+                <div class="t">${esc(s.title)}</div>
+                <div class="s">${esc(s.artist)} · saved ${new Date(s.savedAt).toLocaleDateString()}${s.hasChart ? ' · chords' : ' · lyrics'}</div>
+              </a>
+              <div class="row-actions">
+                <button class="row-btn" data-rm="${esc(s.id)}">✕</button>
+              </div>
+            </div>`
+          )
+          .join('');
+      el.querySelectorAll('[data-rm]').forEach((b) =>
+        b.addEventListener('click', () => {
+          removeOffline((b as HTMLElement).dataset.rm!);
+          render();
+          toast('Removed');
+        })
+      );
+    }
+    render();
+  </script>
+</Base>

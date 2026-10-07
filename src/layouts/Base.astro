@@ -1,0 +1,120 @@
+---
+interface Props {
+  title: string;
+  description?: string;
+}
+const { title, description = 'SetList — browse songs, chords & set lists' } = Astro.props;
+import '../styles/global.css';
+const base = import.meta.env.BASE_URL;
+const here = Astro.url.pathname;
+const isHome = here.replace(/\/$/, '') === base.replace(/\/$/, '');
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5" />
+    <title>{title} · SetList</title>
+    <meta name="description" content={description} />
+    <link rel="manifest" href={`${base}/manifest.webmanifest`} />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0d1210" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href={`${base}/icon.svg`} type="image/svg+xml" />
+    <link rel="apple-touch-icon" href={`${base}/icon.svg`} />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="SetList" />
+    <script is:inline>
+      // Apply theme before first paint (no flash)
+      (function () {
+        try {
+          var t = localStorage.getItem('setlist.theme');
+          if (t !== 'light' && t !== 'dark') {
+            t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
+          document.documentElement.dataset.theme = t;
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <header class="topbar">
+      <button class="icon-btn" id="menuBtn" aria-label="Menu">☰</button>
+      <h1 id="pageTitle">{title}</h1>
+      <slot name="actions" />
+    </header>
+
+    <div class="scrim" id="scrim"></div>
+    <aside class="drawer" id="drawer" aria-hidden="true">
+      <div class="brand">🎸 SetList</div>
+      <a href={`${base}/`} class={isHome ? 'active' : ''}>🏠 Home</a>
+      <a href={`${base}/sets/`} class={here.includes('/sets') ? 'active' : ''}>📚 My Song Sets</a>
+      <a href={`${base}/offline/`} class={here.includes('/offline') ? 'active' : ''}>⬇️ Offline Songs</a>
+      <a href={`${base}/chords/`} class={here.includes('/chords') ? 'active' : ''}>🎸 Chord Library</a>
+      <a href={`${base}/scales/`} class={here.includes('/scales') ? 'active' : ''}>🎼 Scale Library</a>
+      <hr />
+      <button class="drawer-item" id="themeBtn">
+        <span id="themeIco">🌙</span>
+        <span>Dark mode</span>
+        <span class="spacer" style="flex:1"></span>
+        <span id="themeState" style="color:var(--muted);font-size:13px">…</span>
+      </button>
+      <div class="spacer"></div>
+      <div class="version">SetList v0.1 · data: iTunes · LRCLIB</div>
+    </aside>
+
+    <main>
+      <slot />
+    </main>
+
+    <div class="sheet-scrim" id="sheetScrim"></div>
+    <div class="sheet" id="sheet">
+      <div class="grab"></div>
+      <div id="sheetBody"></div>
+    </div>
+    <div class="toast" id="toast"></div>
+
+    <script>
+      // Drawer
+      const drawer = document.getElementById('drawer')!;
+      const scrim = document.getElementById('scrim')!;
+      const open = (on: boolean) => {
+        drawer.classList.toggle('open', on);
+        scrim.classList.toggle('open', on);
+        drawer.setAttribute('aria-hidden', String(!on));
+      };
+      document.getElementById('menuBtn')!.addEventListener('click', () => open(true));
+      scrim.addEventListener('click', () => open(false));
+      drawer.addEventListener('click', (e) => {
+        if ((e.target as HTMLElement).tagName === 'A') open(false);
+      });
+
+      // Theme toggle
+      const syncTheme = () => {
+        const t = document.documentElement.dataset.theme;
+        document.getElementById('themeIco')!.textContent = t === 'dark' ? '☀️' : '🌙';
+        document.getElementById('themeState')!.textContent = t === 'dark' ? 'On' : 'Off';
+      };
+      syncTheme();
+      document.getElementById('themeBtn')!.addEventListener('click', () => {
+        const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        document.documentElement.dataset.theme = next;
+        try { localStorage.setItem('setlist.theme', next); } catch (e) {}
+        syncTheme();
+      });
+
+      // Sheet dismissal
+      document.getElementById('sheetScrim')!.addEventListener('click', () => {
+        document.getElementById('sheet')!.classList.remove('open');
+        document.getElementById('sheetScrim')!.classList.remove('open');
+      });
+
+      // Service worker (production only)
+      if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+        window.addEventListener('load', () => {
+          const base = import.meta.env.BASE_URL;
+          navigator.serviceWorker.register(`${base}/sw.js`).catch(() => {});
+        });
+      }
+    </script>
+  </body>
+</html>
