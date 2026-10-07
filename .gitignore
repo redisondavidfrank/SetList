@@ -2,6 +2,9 @@
 dist/
 .astro/
 
+# source datasets (downloaded, not committed)
+data/
+
 # dependencies
 node_modules/
 
